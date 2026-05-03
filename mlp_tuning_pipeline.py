@@ -1,245 +1,179 @@
-"""Pipeline de referencia para tuning con MLP (clasificación y regresión).
+"""Ejercicio MLPRegressor para California Housing.
 
-Este script aplica la estructura del notebook de clase sobre el caso del repositorio.
+Objetivos:
+- baseline reproducible
+- variantes manuales
+- comparación con R2/MAE/MSE/RMSE
+- GridSearchCV + análisis de cv_results_
 """
 
 import warnings
 warnings.filterwarnings("ignore")
 
+import random
 import numpy as np
 import pandas as pd
-from sklearn.datasets import load_iris
-from sklearn.model_selection import (
-    GridSearchCV,
-    ParameterGrid,
-    RandomizedSearchCV,
-    cross_val_score,
-    train_test_split,
-)
-from sklearn.metrics import (
-    accuracy_score,
-    classification_report,
-    confusion_matrix,
-    mean_absolute_error,
-    mean_squared_error,
-    r2_score,
-)
-from sklearn.neural_network import MLPClassifier, MLPRegressor
+
+from sklearn.model_selection import train_test_split, KFold, GridSearchCV
 from sklearn.pipeline import Pipeline
-from sklearn.preprocessing import StandardScaler
+from sklearn.preprocessing import StandardScaler, MinMaxScaler
+from sklearn.neural_network import MLPRegressor
+from sklearn.metrics import mean_absolute_error, mean_squared_error, r2_score
+
+RANDOM_STATE = 31415
+random.seed(RANDOM_STATE)
+np.random.seed(RANDOM_STATE)
+
+pd.set_option("display.max_columns", 200)
+pd.set_option("display.width", 180)
 
 
-def run_classification_pipeline():
-    """Clasificación con Iris para replicar la referencia de clase."""
-    iris = load_iris()
+def metricas_regresion(y_true, y_pred):
+    mae = mean_absolute_error(y_true, y_pred)
+    mse = mean_squared_error(y_true, y_pred)
+    rmse = np.sqrt(mse)
+    r2 = r2_score(y_true, y_pred)
+    return {
+        "R2": r2,
+        "MAE": mae,
+        "MSE": mse,
+        "RMSE": rmse,
+    }
 
-    X = pd.DataFrame(iris.data, columns=iris.feature_names)
-    y = iris.target
-    X = X[["sepal length (cm)", "petal length (cm)"]]
 
-    X_train, X_test, y_train, y_test = train_test_split(
-        X, y, test_size=0.2, random_state=42, stratify=y
+def construir_modelos():
+    """Devuelve las 10 configuraciones pedidas."""
+    return [
+        {"modelo": "Baseline_STD", "scaler": "standard", "hidden_layers": (64, 32), "activation": "relu", "alpha": 1e-4},
+        {"modelo": "Variante_1_STD", "scaler": "standard", "hidden_layers": (32,), "activation": "relu", "alpha": 1e-4},
+        {"modelo": "Variante_2_STD", "scaler": "standard", "hidden_layers": (128, 64), "activation": "relu", "alpha": 1e-4},
+        {"modelo": "Variante_3_STD", "scaler": "standard", "hidden_layers": (64, 32), "activation": "tanh", "alpha": 1e-4},
+        {"modelo": "Variante_4_STD", "scaler": "standard", "hidden_layers": (64, 32), "activation": "relu", "alpha": 1e-2},
+        {"modelo": "Baseline_MM", "scaler": "minmax", "hidden_layers": (64, 32), "activation": "relu", "alpha": 1e-4},
+        {"modelo": "Variante_1_MM", "scaler": "minmax", "hidden_layers": (32,), "activation": "relu", "alpha": 1e-4},
+        {"modelo": "Variante_2_MM", "scaler": "minmax", "hidden_layers": (128, 64), "activation": "relu", "alpha": 1e-4},
+        {"modelo": "Variante_3_MM", "scaler": "minmax", "hidden_layers": (64, 32), "activation": "tanh", "alpha": 1e-4},
+        {"modelo": "Variante_4_MM", "scaler": "minmax", "hidden_layers": (64, 32), "activation": "relu", "alpha": 1e-2},
+    ]
+
+
+def crear_pipeline(cfg):
+    scaler = StandardScaler() if cfg["scaler"] == "standard" else MinMaxScaler()
+    mlp = MLPRegressor(
+        hidden_layer_sizes=cfg["hidden_layers"],
+        activation=cfg["activation"],
+        alpha=cfg["alpha"],
+        max_iter=300,
+        random_state=RANDOM_STATE,
     )
-
-    pipeline_base_clf = Pipeline([
-        ("scaler", StandardScaler()),
-        (
-            "mlp",
-            MLPClassifier(
-                hidden_layer_sizes=(50,),
-                activation="relu",
-                alpha=0.0001,
-                max_iter=1000,
-                random_state=42,
-            ),
-        ),
+    return Pipeline([
+        ("scaler", scaler),
+        ("mlp", mlp),
     ])
 
-    pipeline_base_clf.fit(X_train, y_train)
-    y_pred_base = pipeline_base_clf.predict(X_test)
 
-    scores_cv_base = cross_val_score(
-        pipeline_base_clf,
-        X,
-        y,
-        cv=10,
-        scoring="accuracy",
-    )
+def ejecutar_variantes(X_train, X_test, y_train, y_test):
+    rows = []
+    for cfg in construir_modelos():
+        pipe = crear_pipeline(cfg)
+        pipe.fit(X_train, y_train)
 
-    param_grid_clf = {
-        "mlp__hidden_layer_sizes": [(20,), (50,), (100,), (50, 50)],
-        "mlp__activation": ["relu", "tanh"],
-        "mlp__alpha": [0.0001, 0.001, 0.01],
-    }
+        pred_train = pipe.predict(X_train)
+        pred_test = pipe.predict(X_test)
 
-    combinaciones = list(ParameterGrid(param_grid_clf))
+        m_train = metricas_regresion(y_train, pred_train)
+        m_test = metricas_regresion(y_test, pred_test)
 
-    grid_search_clf = GridSearchCV(
-        estimator=pipeline_base_clf,
-        param_grid=param_grid_clf,
-        scoring="accuracy",
-        cv=5,
-        n_jobs=-1,
-        verbose=0,
-        return_train_score=True,
-    )
-    grid_search_clf.fit(X, y)
+        rows.append({
+            "Modelo": cfg["modelo"],
+            "Scaler": cfg["scaler"],
+            "Hidden Layers": cfg["hidden_layers"],
+            "Activacion": cfg["activation"],
+            "Alpha": cfg["alpha"],
+            "R2_train": m_train["R2"],
+            "MAE_train": m_train["MAE"],
+            "MSE_train": m_train["MSE"],
+            "RMSE_train": m_train["RMSE"],
+            "R2_test": m_test["R2"],
+            "MAE_test": m_test["MAE"],
+            "MSE_test": m_test["MSE"],
+            "RMSE_test": m_test["RMSE"],
+        })
 
-    best_model_grid_clf = grid_search_clf.best_estimator_
-    y_pred_grid = best_model_grid_clf.predict(X_test)
-
-    param_dist_clf = {
-        "mlp__hidden_layer_sizes": [(20,), (50,), (100,), (150,), (50, 50), (100, 50)],
-        "mlp__activation": ["relu", "tanh", "logistic"],
-        "mlp__alpha": np.logspace(-5, -1, 20),
-        "mlp__learning_rate_init": np.logspace(-4, -1, 20),
-    }
-
-    random_search_clf = RandomizedSearchCV(
-        estimator=pipeline_base_clf,
-        param_distributions=param_dist_clf,
-        n_iter=15,
-        scoring="accuracy",
-        cv=5,
-        random_state=42,
-        n_jobs=-1,
-        verbose=0,
-        return_train_score=True,
-    )
-    random_search_clf.fit(X_train, y_train)
-
-    best_model_random_clf = random_search_clf.best_estimator_
-    y_pred_random = best_model_random_clf.predict(X_test)
-
-    return {
-        "base_test_accuracy": accuracy_score(y_test, y_pred_base),
-        "base_cv_mean_accuracy": float(scores_cv_base.mean()),
-        "base_cv_std_accuracy": float(scores_cv_base.std()),
-        "grid_best_params": grid_search_clf.best_params_,
-        "grid_best_cv_accuracy": float(grid_search_clf.best_score_),
-        "grid_test_accuracy": accuracy_score(y_test, y_pred_grid),
-        "grid_confusion_matrix": confusion_matrix(y_test, y_pred_grid).tolist(),
-        "grid_classification_report": classification_report(
-            y_test, y_pred_grid, target_names=iris.target_names
-        ),
-        "random_best_params": random_search_clf.best_params_,
-        "random_best_cv_accuracy": float(random_search_clf.best_score_),
-        "random_test_accuracy": accuracy_score(y_test, y_pred_random),
-        "total_grid_combinations": len(combinaciones),
-        "total_grid_models_cv5": len(combinaciones) * 5,
-    }
+    return pd.DataFrame(rows).sort_values("R2_test", ascending=False).reset_index(drop=True)
 
 
-def run_regression_pipeline(data_path: str = "california_housing.csv"):
-    """Regresión con California Housing usando el CSV del repositorio."""
-    df = pd.read_csv(data_path)
-
-    target_col = "MedHouseVal" if "MedHouseVal" in df.columns else df.columns[-1]
-    X_reg = df.drop(columns=[target_col])
-    y_reg = df[target_col]
-
-    X_train_reg, X_test_reg, y_train_reg, y_test_reg = train_test_split(
-        X_reg, y_reg, test_size=0.2, random_state=42
-    )
-
-    pipeline_base_reg = Pipeline([
+def ejecutar_grid_search(X_train, y_train):
+    pipe = Pipeline([
         ("scaler", StandardScaler()),
-        (
-            "mlp",
-            MLPRegressor(
-                hidden_layer_sizes=(50,),
-                activation="relu",
-                alpha=0.0001,
-                max_iter=1000,
-                random_state=42,
-            ),
-        ),
+        ("mlp", MLPRegressor(max_iter=300, random_state=RANDOM_STATE)),
     ])
 
-    pipeline_base_reg.fit(X_train_reg, y_train_reg)
-    y_pred_reg_base = pipeline_base_reg.predict(X_test_reg)
+    param_grid = [
+        {
+            "scaler": [StandardScaler()],
+            "mlp__hidden_layer_sizes": [(32,), (64, 32), (128, 64)],
+            "mlp__activation": ["relu", "tanh"],
+            "mlp__alpha": [1e-4, 1e-2],
+        },
+        {
+            "scaler": [MinMaxScaler()],
+            "mlp__hidden_layer_sizes": [(32,), (64, 32), (128, 64)],
+            "mlp__activation": ["relu", "tanh"],
+            "mlp__alpha": [1e-4, 1e-2],
+        },
+    ]
 
-    scores_cv_reg = cross_val_score(
-        pipeline_base_reg,
-        X_reg,
-        y_reg,
-        cv=5,
+    cv = KFold(n_splits=5, shuffle=True, random_state=RANDOM_STATE)
+
+    gs = GridSearchCV(
+        estimator=pipe,
+        param_grid=param_grid,
         scoring="r2",
-    )
-
-    param_grid_reg = {
-        "mlp__hidden_layer_sizes": [(50,), (100,)],
-        "mlp__activation": ["relu", "tanh"],
-        "mlp__alpha": [0.0001, 0.001],
-    }
-
-    grid_search_reg = GridSearchCV(
-        estimator=pipeline_base_reg,
-        param_grid=param_grid_reg,
-        scoring="r2",
-        cv=3,
+        cv=cv,
         n_jobs=-1,
-        verbose=0,
         return_train_score=True,
-    )
-    grid_search_reg.fit(X_reg, y_reg)
-
-    best_model_grid_reg = grid_search_reg.best_estimator_
-    y_pred_grid_reg = best_model_grid_reg.predict(X_test_reg)
-
-    param_dist_reg = {
-        "mlp__hidden_layer_sizes": [(50,), (100,), (150,), (50, 50), (100, 50)],
-        "mlp__activation": ["relu", "tanh", "logistic"],
-        "mlp__alpha": np.logspace(-5, -1, 20),
-        "mlp__learning_rate_init": np.logspace(-4, -2, 20),
-    }
-
-    random_search_reg = RandomizedSearchCV(
-        estimator=pipeline_base_reg,
-        param_distributions=param_dist_reg,
-        n_iter=8,
-        scoring="r2",
-        cv=3,
-        random_state=42,
-        n_jobs=-1,
         verbose=0,
-        return_train_score=True,
     )
-    random_search_reg.fit(X_train_reg, y_train_reg)
+    gs.fit(X_train, y_train)
 
-    best_model_random_reg = random_search_reg.best_estimator_
-    y_pred_random_reg = best_model_random_reg.predict(X_test_reg)
-
-    return {
-        "base_mae": mean_absolute_error(y_test_reg, y_pred_reg_base),
-        "base_rmse": float(np.sqrt(mean_squared_error(y_test_reg, y_pred_reg_base))),
-        "base_r2": r2_score(y_test_reg, y_pred_reg_base),
-        "base_cv_r2_mean": float(scores_cv_reg.mean()),
-        "base_cv_r2_std": float(scores_cv_reg.std()),
-        "grid_best_params": grid_search_reg.best_params_,
-        "grid_best_cv_r2": float(grid_search_reg.best_score_),
-        "grid_mae": mean_absolute_error(y_test_reg, y_pred_grid_reg),
-        "grid_rmse": float(np.sqrt(mean_squared_error(y_test_reg, y_pred_grid_reg))),
-        "grid_r2": r2_score(y_test_reg, y_pred_grid_reg),
-        "random_best_params": random_search_reg.best_params_,
-        "random_best_cv_r2": float(random_search_reg.best_score_),
-        "random_mae": mean_absolute_error(y_test_reg, y_pred_random_reg),
-        "random_rmse": float(np.sqrt(mean_squared_error(y_test_reg, y_pred_random_reg))),
-        "random_r2": r2_score(y_test_reg, y_pred_random_reg),
-    }
+    cv_results = pd.DataFrame(gs.cv_results_).sort_values("rank_test_score").reset_index(drop=True)
+    columnas = [
+        "rank_test_score", "mean_test_score", "std_test_score", "mean_train_score",
+        "param_scaler", "param_mlp__hidden_layer_sizes", "param_mlp__activation", "param_mlp__alpha",
+    ]
+    return gs, cv_results[columnas]
 
 
 def main():
-    clf_results = run_classification_pipeline()
-    reg_results = run_regression_pipeline()
+    print(f"RANDOM_STATE = {RANDOM_STATE}")
 
-    print("=== Clasificación (Iris) ===")
-    for k, v in clf_results.items():
-        print(f"{k}: {v}")
+    df = pd.read_csv("california_housing.csv")
+    target_col = "MedHouseVal"
 
-    print("\n=== Regresión (California Housing local) ===")
-    for k, v in reg_results.items():
-        print(f"{k}: {v}")
+    X = df.drop(columns=[target_col]).copy()
+    y = df[target_col].copy()
+
+    X_train, X_test, y_train, y_test = train_test_split(
+        X, y, test_size=0.25, random_state=RANDOM_STATE
+    )
+
+    tabla_modelos = ejecutar_variantes(X_train, X_test, y_train, y_test)
+    print("\n=== Resultados de las 10 redes (ordenadas por R2_test) ===")
+    print(tabla_modelos.to_string(index=False))
+
+    gs, tabla_cv = ejecutar_grid_search(X_train, y_train)
+    best_model = gs.best_estimator_
+    pred_test_best = best_model.predict(X_test)
+    metricas_best = metricas_regresion(y_test, pred_test_best)
+
+    print("\n=== GridSearchCV ===")
+    print("Mejores hiperparámetros:", gs.best_params_)
+    print("Mejor score CV (R2):", gs.best_score_)
+    print("Métricas en test del mejor modelo:", metricas_best)
+
+    print("\n=== Top 10 de cv_results_ (por rank_test_score) ===")
+    print(tabla_cv.head(10).to_string(index=False))
 
 
 if __name__ == "__main__":
