@@ -106,41 +106,44 @@ def ejecutar_variantes(X_train, X_test, y_train, y_test):
 def ejecutar_grid_search(X_train, y_train):
     pipe = Pipeline([
         ("scaler", StandardScaler()),
-        ("mlp", MLPRegressor(max_iter=300, random_state=RANDOM_STATE)),
+        ("mlp", MLPRegressor(max_iter=100, solver="adam", random_state=RANDOM_STATE)),
     ])
 
-    param_grid = [
-        {
-            "scaler": [StandardScaler()],
-            "mlp__hidden_layer_sizes": [(32,), (64, 32), (128, 64)],
-            "mlp__activation": ["relu", "tanh"],
-            "mlp__alpha": [1e-4, 1e-2],
-        },
-        {
-            "scaler": [MinMaxScaler()],
-            "mlp__hidden_layer_sizes": [(32,), (64, 32), (128, 64)],
-            "mlp__activation": ["relu", "tanh"],
-            "mlp__alpha": [1e-4, 1e-2],
-        },
-    ]
+    param_grid = {
+        "mlp__hidden_layer_sizes": [(32,), (64, 32), (128, 64)],
+        "mlp__activation": ["relu", "tanh"],
+        "mlp__alpha": [1e-4, 1e-3, 1e-2],
+    }
 
-    cv = KFold(n_splits=5, shuffle=True, random_state=RANDOM_STATE)
+    scoring = {
+        "R2": "r2",
+        "MAE": "neg_mean_absolute_error",
+        "MSE": "neg_mean_squared_error",
+        "RMSE": "neg_root_mean_squared_error",
+    }
+
+    cv = KFold(n_splits=3, shuffle=True, random_state=RANDOM_STATE)
 
     gs = GridSearchCV(
         estimator=pipe,
         param_grid=param_grid,
-        scoring="r2",
+        scoring=scoring,
         cv=cv,
+        refit="R2",
         n_jobs=-1,
         return_train_score=True,
         verbose=0,
     )
     gs.fit(X_train, y_train)
 
-    cv_results = pd.DataFrame(gs.cv_results_).sort_values("rank_test_score").reset_index(drop=True)
+    cv_results = pd.DataFrame(gs.cv_results_).sort_values("rank_test_R2").reset_index(drop=True)
+    for c in ["mean_test_MAE", "mean_test_MSE", "mean_test_RMSE"]:
+        cv_results[c] = -cv_results[c]
+
     columnas = [
-        "rank_test_score", "mean_test_score", "std_test_score", "mean_train_score",
-        "param_scaler", "param_mlp__hidden_layer_sizes", "param_mlp__activation", "param_mlp__alpha",
+        "rank_test_R2", "mean_test_R2", "std_test_R2", "mean_train_R2",
+        "mean_test_MAE", "mean_test_MSE", "mean_test_RMSE",
+        "param_mlp__hidden_layer_sizes", "param_mlp__activation", "param_mlp__alpha",
     ]
     return gs, cv_results[columnas]
 
@@ -172,7 +175,7 @@ def main():
     print("Mejor score CV (R2):", gs.best_score_)
     print("Métricas en test del mejor modelo:", metricas_best)
 
-    print("\n=== Top 10 de cv_results_ (por rank_test_score) ===")
+    print("\n=== Top 10 de cv_results_ (por rank_test_R2) ===")
     print(tabla_cv.head(10).to_string(index=False))
 
 
